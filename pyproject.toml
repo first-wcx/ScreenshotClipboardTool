@@ -5,9 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "integrated-capture-clipboard"
 version = "0.1.0"
-description = "Integrated Windows screenshot, annotation, pin, clipboard history, and sync tool."
+description = "Integrated Windows/macOS screenshot, annotation, pin, clipboard history, and sync tool."
 requires-python = ">=3.9"
 dependencies = ["Pillow>=10.0", "pystray>=0.19.0"]
+
+[project.optional-dependencies]
+macos = [
+    "pyobjc-framework-Cocoa>=9.0",
+    "pyobjc-framework-Quartz>=9.0",
+    "pynput>=1.7.0",
+]
 
 [project.scripts]
 integrated-tool = "integrated_tool.app:main"

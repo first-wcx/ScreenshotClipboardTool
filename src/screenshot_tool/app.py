@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ctypes
 import math
 import os
 import subprocess
@@ -15,6 +14,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageGrab, ImageTk
 
+from platform_adapter import HotkeyDef, get_adapter
 from .assets import ensure_app_icon, load_app_icon_photo
 from .clipboard import copy_image_to_clipboard
 from .config import Settings, ensure_runtime_dirs, load_settings, save_settings
@@ -69,32 +69,13 @@ PALETTE = [
 
 
 def enable_dpi_awareness() -> None:
-    if sys.platform != "win32":
-        return
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except Exception:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
+    """启用 DPI 感知，委托给平台适配器。"""
+    get_adapter().enable_dpi_awareness()
 
 
 def virtual_screen_bounds() -> Tuple[int, int, int, int]:
-    if sys.platform != "win32":
-        root = tk.Tk()
-        root.withdraw()
-        width = root.winfo_screenwidth()
-        height = root.winfo_screenheight()
-        root.destroy()
-        return 0, 0, width, height
-
-    user32 = ctypes.windll.user32
-    x = user32.GetSystemMetrics(76)
-    y = user32.GetSystemMetrics(77)
-    width = user32.GetSystemMetrics(78)
-    height = user32.GetSystemMetrics(79)
-    return x, y, width, height
+    """获取虚拟屏幕边界，委托给平台适配器。"""
+    return get_adapter().virtual_screen_bounds()
 
 
 def unique_path(path: Path) -> Path:
@@ -144,10 +125,12 @@ def wheel_zoom_factor(delta: int) -> float:
 
 
 def apply_window_icon(window: tk.Toplevel, icon_path: Path, icon_photo: Optional[ImageTk.PhotoImage] = None) -> None:
-    try:
-        window.iconbitmap(str(icon_path))
-    except tk.TclError:
-        pass
+    """设置窗口图标，跨平台兼容。"""
+    if sys.platform == "win32":
+        try:
+            window.iconbitmap(str(icon_path))
+        except tk.TclError:
+            pass
     if icon_photo is not None:
         try:
             window.iconphoto(False, icon_photo)
@@ -1122,9 +1105,9 @@ class ScreenshotApp(tk.Tk):
     def open_save_folder(self) -> None:
         ensure_runtime_dirs(self.settings)
         path = Path(self.settings.save_dir)
-        if sys.platform == "win32":
-            os.startfile(str(path))
-        else:
+        try:
+            get_adapter().open_file(str(path))
+        except OSError:
             messagebox.showinfo("保存目录", str(path), parent=self)
 
 
@@ -2711,18 +2694,16 @@ class HistoryWindow(tk.Toplevel):
             return
         path = Path(item.path)
         if path.exists():
-            if sys.platform == "win32":
-                subprocess.Popen(["explorer.exe", f"/select,{path.resolve()}"])
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", "-R", str(path)])
-            else:
+            try:
+                get_adapter().reveal_path_in_folder(str(path))
+            except OSError:
                 folder = path.parent if path.parent.exists() else Path(self.master.settings.save_dir)
-                subprocess.Popen(["xdg-open", str(folder)])
+                get_adapter().open_file(str(folder))
         elif path.parent.exists():
             messagebox.showwarning("文件不存在", f"找不到文件，将打开所在目录：\n{path}", parent=self)
-            if sys.platform == "win32":
-                os.startfile(str(path.parent))
-            else:
+            try:
+                get_adapter().open_file(str(path.parent))
+            except OSError:
                 messagebox.showinfo("目录", str(path.parent), parent=self)
         else:
             messagebox.showwarning("文件不存在", f"找不到文件：\n{path}", parent=self)

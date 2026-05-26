@@ -20,7 +20,6 @@ from PIL import Image, ImageDraw
 Point = Tuple[int, int]
 BBox = Tuple[int, int, int, int]
 APP_NAME = "IntegratedCaptureClipboard"
-RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
 def project_root() -> Path:
@@ -41,6 +40,7 @@ add_legacy_import_paths()
 
 import clipboard_viewer as clip  # noqa: E402
 import pystray  # noqa: E402
+from platform_adapter import HotkeyDef, get_adapter  # noqa: E402
 from screenshot_tool.clipboard import copy_image_to_clipboard  # noqa: E402
 from screenshot_tool.config import Settings as ScreenshotSettings  # noqa: E402
 from screenshot_tool.hotkeys import (  # noqa: E402
@@ -63,9 +63,18 @@ DEFAULT_HOTKEYS = {
 
 
 def app_data_dir() -> Path:
-    base = os.environ.get("APPDATA")
-    if base:
+    """获取应用数据目录（跨平台）。"""
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA")
+        if base:
+            return Path(base) / APP_NAME
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
         return Path(base) / APP_NAME
+    # Linux 或其他平台
+    base = os.environ.get("XDG_CONFIG_HOME")
+    if base:
+        return Path(base) / APP_NAME.lower()
     return Path.home() / f".{APP_NAME.lower()}"
 
 
@@ -80,52 +89,55 @@ def integrated_settings_path() -> Path:
 
 
 def current_startup_command() -> str:
+    """获取当前平台的启动命令。"""
     if getattr(sys, "frozen", False):
-        return quote_windows_path(Path(sys.executable).resolve())
+        return quote_path(Path(sys.executable).resolve())
     executable = Path(sys.executable).resolve()
-    if os.name == "nt" and executable.name.lower() == "python.exe":
+    if sys.platform == "win32" and executable.name.lower() == "python.exe":
         pythonw = executable.with_name("pythonw.exe")
         if pythonw.exists():
             executable = pythonw
-    return f"{quote_windows_path(executable)} {quote_windows_path(project_root() / 'run.py')}"
+    return f"{quote_path(executable)} {quote_path(project_root() / 'run.py')}"
 
 
-def quote_windows_path(path: Path) -> str:
+def quote_path(path: Path) -> str:
+    """给路径加引号（跨平台）。"""
     return f'"{path}"'
 
 
-def read_startup_value() -> Optional[str]:
-    if sys.platform != "win32":
-        return None
-    import winreg
+# 保留旧名以兼容
+def quote_windows_path(path: Path) -> str:
+    """已弃用：保留签名以兼容，委托给 quote_path。"""
+    return quote_path(path)
 
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY_PATH, 0, winreg.KEY_READ) as key:
-            value, _value_type = winreg.QueryValueEx(key, APP_NAME)
-            return str(value)
-    except (FileNotFoundError, OSError):
-        return None
+
+def read_startup_value() -> Optional[str]:
+    """读取开机自启注册值（兼容层，委托给适配器）。"""
+    # Windows 上可通过适配器获取，其他平台返回 None
+    if sys.platform == "win32":
+        import winreg
+        try:
+            from windows_adapter import RUN_KEY_PATH, RUN_VALUE_NAME
+        except ImportError:
+            RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            RUN_VALUE_NAME = APP_NAME
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY_PATH, 0, winreg.KEY_READ) as key:
+                value, _value_type = winreg.QueryValueEx(key, RUN_VALUE_NAME)
+                return str(value)
+        except (FileNotFoundError, OSError):
+            return None
+    return None
 
 
 def is_integrated_startup_enabled() -> bool:
-    return read_startup_value() is not None
+    """检查开机自启是否已启用，委托给适配器。"""
+    return get_adapter().is_startup_enabled()
 
 
 def set_integrated_startup_enabled(enabled: bool) -> Optional[str]:
-    if sys.platform != "win32":
-        raise RuntimeError("开机自启只支持 Windows。")
-    import winreg
-
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY_PATH, 0, winreg.KEY_SET_VALUE) as key:
-        if enabled:
-            command = current_startup_command()
-            winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, command)
-            return command
-        try:
-            winreg.DeleteValue(key, APP_NAME)
-        except FileNotFoundError:
-            pass
-        return None
+    """设置开机自启，委托给适配器。"""
+    return get_adapter().set_startup_enabled(enabled)
 
 
 def configure_clipboard_module() -> None:
@@ -384,31 +396,20 @@ def save_integrated_config(settings: ScreenshotSettings, hotkeys: Dict[str, str]
     )
 
 
-def parse_hotkey(value: str, callback: Callable[[], None]) -> Optional[Hotkey]:
+def parse_hotkey(value: str, callback: Callable[[], None]) -> Optional[HotkeyDef]:
+    """将 "Alt+A" 风格的热键字符串解析为跨平台 HotkeyDef。"""
     parts = [part.strip() for part in value.replace(" ", "").split("+") if part.strip()]
     if not parts:
         return None
+    # 验证格式有效性
     key = parts[-1].upper()
-    modifiers = 0
     for part in parts[:-1]:
         name = part.upper()
-        if name in {"CTRL", "CONTROL"}:
-            modifiers |= MOD_CONTROL
-        elif name == "SHIFT":
-            modifiers |= MOD_SHIFT
-        elif name == "ALT":
-            modifiers |= MOD_ALT
-        elif name in {"WIN", "WINDOWS"}:
-            modifiers |= MOD_WIN
-        else:
+        if name not in {"CTRL", "CONTROL", "SHIFT", "ALT", "WIN", "WINDOWS"}:
             raise ValueError(f"不支持的修饰键: {part}")
-    if len(key) == 1 and key.isalnum():
-        vk = ord(key)
-    elif key.startswith("F") and key[1:].isdigit() and 1 <= int(key[1:]) <= 12:
-        vk = 0x70 + int(key[1:]) - 1
-    else:
+    if not (len(key) == 1 and key.isalnum()) and not (key.startswith("F") and key[1:].isdigit() and 1 <= int(key[1:]) <= 12):
         raise ValueError(f"不支持的按键: {key}")
-    return Hotkey(value, modifiers, vk, callback)
+    return HotkeyDef(name=value, key=value, callback=callback)
 
 
 @dataclass
@@ -1152,7 +1153,7 @@ class IntegratedApp(clip.ClipboardViewer):
             return
         path = Path(item.path)
         if path.exists():
-            subprocess.Popen(["explorer.exe", f"/select,{path.resolve()}"])
+            get_adapter().reveal_path_in_folder(str(path))
 
     def remove_recent_capture(self) -> None:
         item = self.selected_recent_capture()
@@ -1228,9 +1229,8 @@ class IntegratedApp(clip.ClipboardViewer):
 
 
 def main() -> None:
-    if os.name != "nt":
-        raise SystemExit("Integrated Capture Clipboard currently supports Windows only.")
-    clip.enable_dpi_awareness()
+    """启动整合版应用（跨平台兼容）。"""
+    get_adapter().enable_dpi_awareness()
     app = IntegratedApp()
     if "--self-test-components" in sys.argv:
         app.update()
