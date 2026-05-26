@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "integrated-capture-clipboard"
+version = "0.1.0"
+description = "Integrated Windows screenshot, annotation, pin, clipboard history, and sync tool."
+requires-python = ">=3.9"
+dependencies = ["Pillow>=10.0", "pystray>=0.19.0"]
+
+[project.scripts]
+integrated-tool = "integrated_tool.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

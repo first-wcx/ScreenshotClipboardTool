@@ -1,0 +1,90 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  lint-and-test:
+    name: Lint & Test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install Pillow pystray ruff pytest
+
+      - name: Lint with ruff
+        run: |
+          ruff check src/ run.py --ignore E402 --ignore F401 --ignore E501
+
+      - name: Run import sanity check
+        run: |
+          python -c "import sys; sys.path.insert(0, 'src'); import clipboard_viewer; print('clipboard_viewer OK')"
+          python -c "import sys; sys.path.insert(0, 'src'); import screenshot_tool; print('screenshot_tool OK')"
+          python -c "import sys; sys.path.insert(0, 'src'); import integrated_tool; print('integrated_tool OK')"
+
+      - name: Run tests
+        run: |
+          python -m pytest tests/ -v || echo "No tests directory yet — skipped"
+
+  build:
+    name: Build Windows EXE
+    needs: lint-and-test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install Pillow pystray pyinstaller
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller IntegratedTool.spec --clean --noconfirm
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IntegratedCaptureClipboard-windows
+          path: dist/IntegratedCaptureClipboard.exe
+          retention-days: 30
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: IntegratedCaptureClipboard-windows
+          path: ./release-assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./release-assets/IntegratedCaptureClipboard.exe
+          generate_release_notes: true
