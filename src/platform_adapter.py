@@ -231,5 +231,7 @@ def get_adapter() -> PlatformAdapter:
             from macos_adapter import MacOSAdapter
             _adapter_instance = MacOSAdapter()
         else:
-            raise RuntimeError(f"不支持的平台: {sys.platform}")
+            # Linux 及其他类 Unix 系统
+            from linux_adapter import LinuxAdapter
+            _adapter_instance = LinuxAdapter()
     return _adapter_instance
