@@ -591,8 +591,6 @@ class IntegratedApp(clip.ClipboardViewer):
         self.hotkey_manager: Optional[GlobalHotkeyManager] = None
         self.hotkeys = load_hotkeys()
         self.hotkey_vars: Dict[str, tk.StringVar] = {}
-        self.sync_device_count_var: Optional[tk.StringVar] = None
-        self.sync_device_list_var: Optional[tk.StringVar] = None
         super().__init__()
         self.title("截图剪切板工具")
         self.hotkey_manager = GlobalHotkeyManager(self)
@@ -609,30 +607,16 @@ class IntegratedApp(clip.ClipboardViewer):
         self.clipboard_tab = ttk.Frame(self.notebook, padding=8)
         self.capture_tab = ttk.Frame(self.notebook, padding=8)
         self.settings_tab = ttk.Frame(self.notebook, padding=8)
-        self.devices_tab = ttk.Frame(self.notebook, padding=8)
         self.notebook.add(self.clipboard_tab, text="剪切板")
         self.notebook.add(self.capture_tab, text="截图")
-        self.notebook.add(self.devices_tab, text="设备同步")
-        self.notebook.add(self.settings_tab, text="设置")
+        self.notebook.add(self.settings_tab, text="同步/设置")
 
         self._build_clipboard_tab(self.clipboard_tab)
         self._build_capture_tab(self.capture_tab)
-        self._build_devices_tab(self.devices_tab)
         self._build_settings_tab(self.settings_tab)
 
-        # Sync status bar at the bottom
-        sync_status_frame = ttk.Frame(root)
-        sync_status_frame.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        sync_status_frame.columnconfigure(1, weight=1)
-        self.sync_indicator_var = tk.StringVar(value="● 同步未启用")
-        ttk.Label(
-            sync_status_frame,
-            textvariable=self.sync_indicator_var,
-            foreground="#888888",
-            font=("", 9),
-        ).grid(row=0, column=0, sticky="w", padx=(0, 8))
-        status = ttk.Label(sync_status_frame, textvariable=self.status_var, anchor="w", font=("", 9))
-        status.grid(row=0, column=1, sticky="ew")
+        status = ttk.Label(root, textvariable=self.status_var, anchor="w")
+        status.grid(row=1, column=0, sticky="ew", pady=(8, 0))
 
     def _build_clipboard_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
@@ -643,14 +627,6 @@ class IntegratedApp(clip.ClipboardViewer):
         toolbar.columnconfigure(1, weight=1)
         ttk.Label(toolbar, text="搜索").grid(row=0, column=0, padx=(0, 6))
         ttk.Entry(toolbar, textvariable=self.search_var).grid(row=0, column=1, sticky="ew")
-
-        # Sync status indicator in clipboard toolbar
-        if self.sync_device_count_var is None:
-            self.sync_device_count_var = tk.StringVar(value="0")
-        sync_ind = ttk.Frame(toolbar)
-        sync_ind.grid(row=0, column=2, padx=(8, 0))
-        ttk.Label(sync_ind, text="同步:").pack(side=tk.LEFT, padx=(0, 2))
-        ttk.Label(sync_ind, textvariable=self.sync_device_count_var, foreground="#2196F3").pack(side=tk.LEFT)
 
         actions = ttk.Frame(parent)
         actions.grid(row=1, column=0, sticky="ew", pady=(0, 8))
@@ -757,115 +733,6 @@ class IntegratedApp(clip.ClipboardViewer):
         self.recent_tree.configure(yscrollcommand=recent_scroll.set)
         self.refresh_recent()
 
-    def _build_devices_tab(self, parent: ttk.Frame) -> None:
-        """Build the device sync management tab."""
-        parent.columnconfigure(0, weight=1)
-
-        # Sync enable section
-        sync_enable_frame = ttk.LabelFrame(parent, text="同步功能", padding=8)
-        sync_enable_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        sync_enable_frame.columnconfigure(1, weight=1)
-
-        ttk.Checkbutton(
-            sync_enable_frame,
-            text="启用网络同步",
-            variable=self.sync_enabled_var,
-        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
-
-        ttk.Label(sync_enable_frame, text="对端地址").grid(row=1, column=0, sticky="w", padx=(0, 6))
-        ttk.Entry(sync_enable_frame, textvariable=self.sync_peer_host_var).grid(
-            row=1, column=1, sticky="ew", padx=(0, 6)
-        )
-        ttk.Label(sync_enable_frame, text="端口").grid(row=2, column=0, sticky="w", padx=(0, 6), pady=(4, 0))
-        ttk.Entry(sync_enable_frame, textvariable=self.sync_port_var, width=8).grid(
-            row=2, column=1, sticky="w", padx=(0, 6), pady=(4, 0)
-        )
-        ttk.Label(sync_enable_frame, text="密钥").grid(row=3, column=0, sticky="w", padx=(0, 6), pady=(4, 0))
-        ttk.Entry(sync_enable_frame, textvariable=self.sync_secret_var, show="*").grid(
-            row=3, column=1, sticky="ew", padx=(0, 6), pady=(4, 0)
-        )
-        ttk.Checkbutton(sync_enable_frame, text="同步图片", variable=self.sync_images_var).grid(
-            row=4, column=0, columnspan=2, sticky="w", pady=(4, 0)
-        )
-        ttk.Button(sync_enable_frame, text="应用同步设置", command=self.apply_sync_settings).grid(
-            row=5, column=0, columnspan=2, sticky="ew", pady=(8, 0)
-        )
-        ttk.Label(sync_enable_frame, textvariable=self.sync_status_var).grid(
-            row=6, column=0, columnspan=2, sticky="ew", pady=(4, 0)
-        )
-
-        # Connected devices section
-        devices_frame = ttk.LabelFrame(parent, text="已连接设备", padding=8)
-        devices_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 8))
-        devices_frame.columnconfigure(0, weight=1)
-        devices_frame.rowconfigure(1, weight=1)
-
-        if self.sync_device_count_var is None:
-            self.sync_device_count_var = tk.StringVar(value="0")
-        ttk.Label(devices_frame, textvariable=self.sync_device_count_var).grid(
-            row=0, column=0, sticky="w", pady=(0, 4)
-        )
-
-        # Device list with details
-        self.device_list_text = tk.Text(
-            devices_frame, wrap=tk.WORD, height=6, state=tk.DISABLED, font=("", 9)
-        )
-        self.device_list_text.grid(row=1, column=0, sticky="nsew")
-        device_scroll = ttk.Scrollbar(devices_frame, orient=tk.VERTICAL, command=self.device_list_text.yview)
-        device_scroll.grid(row=1, column=1, sticky="ns")
-        self.device_list_text.configure(yscrollcommand=device_scroll.set)
-
-        ttk.Button(devices_frame, text="刷新设备列表", command=self.refresh_device_list).grid(
-            row=2, column=0, columnspan=2, sticky="ew", pady=(4, 0)
-        )
-
-        parent.rowconfigure(1, weight=1)
-
-    def refresh_device_list(self) -> None:
-        """Refresh the connected device list display."""
-        if not hasattr(self, "device_list_text"):
-            return
-
-        self.device_list_text.configure(state=tk.NORMAL)
-        self.device_list_text.delete("1.0", tk.END)
-
-        if self.sync_manager is None:
-            self.device_list_text.insert("1.0", "同步未启用")
-            self.device_list_text.configure(state=tk.DISABLED)
-            return
-
-        # Check if V2 sync manager (has get_connected_devices)
-        if hasattr(self.sync_manager, "get_connected_devices"):
-            devices = self.sync_manager.get_connected_devices()
-            count = self.sync_manager.get_device_count()
-            if self.sync_device_count_var:
-                self.sync_device_count_var.set(str(count))
-            if not devices:
-                self.device_list_text.insert("1.0", "暂无连接设备\n\n启用同步后，局域网内的其他设备可以连接到此电脑。")
-            else:
-                lines = []
-                for i, device in enumerate(devices, 1):
-                    name = device.get("device_name", "Unknown")
-                    dtype = device.get("device_type", "unknown")
-                    platform = device.get("platform", "")
-                    label = device.get("label", "")
-                    auth = "已认证" if device.get("authenticated") else "未认证"
-                    lines.append(
-                        f"{i}. {name} ({dtype})\n"
-                        f"   平台: {platform}  地址: {label}\n"
-                        f"   状态: {auth}"
-                    )
-                self.device_list_text.insert("1.0", "\n\n".join(lines))
-        else:
-            # Legacy ClipboardSyncManager — just show client count
-            with getattr(self.sync_manager, "clients_lock", threading.Lock()):
-                count = len(getattr(self.sync_manager, "clients", []))
-            if self.sync_device_count_var:
-                self.sync_device_count_var.set(str(count))
-            self.device_list_text.insert("1.0", f"已连接 {count} 个设备（旧版同步协议）")
-
-        self.device_list_text.configure(state=tk.DISABLED)
-
     def _build_settings_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
 
@@ -960,60 +827,6 @@ class IntegratedApp(clip.ClipboardViewer):
             row=0, column=2, sticky="ew", padx=(4, 0)
         )
 
-    def restart_sync(self) -> None:
-        """Override to use V2 sync manager and update sync indicator."""
-        if self.sync_manager:
-            self.sync_manager.stop()
-            self.sync_manager = None
-
-        if not self.sync_config.get("enabled"):
-            self.sync_status_var.set("网络同步未启用")
-            if hasattr(self, "sync_indicator_var") and self.sync_indicator_var:
-                self.sync_indicator_var.set("● 同步未启用")
-            if hasattr(self, "sync_device_count_var") and self.sync_device_count_var:
-                self.sync_device_count_var.set("0")
-            return
-
-        # Always use V2 sync manager (WebSocket + binary frame protocol)
-        self.sync_manager = clip.SyncManagerV2(self.sync_config, self.sync_events)
-        self.sync_manager.start()
-        if self.sync_config.get("peer_host"):
-            self.sync_status_var.set("V2同步启动，正在连接对端。")
-        else:
-            self.sync_status_var.set("V2同步启动，等待设备连接。")
-        if hasattr(self, "sync_indicator_var") and self.sync_indicator_var:
-            self.sync_indicator_var.set("● 同步已启用")
-        self.refresh_device_list()
-
-    def process_sync_events(self) -> None:
-        """Override to also update sync indicator and device list on status changes."""
-        import queue as _queue
-
-        had_device_event = False
-        while True:
-            try:
-                event_type, payload = self.sync_events.get_nowait()
-            except _queue.Empty:
-                break
-
-            if event_type == "status":
-                self.sync_status_var.set(payload)
-                # Update sync indicator based on status
-                if hasattr(self, "sync_indicator_var") and self.sync_indicator_var:
-                    if "已认证" in payload or "connected" in payload.lower():
-                        self.sync_indicator_var.set("● 同步已连接")
-                    elif "启动" in payload:
-                        self.sync_indicator_var.set("● 同步已启用")
-                had_device_event = True
-            elif event_type == "clipboard":
-                self.apply_synced_clipboard_item(payload)
-
-        if had_device_event:
-            self.refresh_device_list()
-
-        if not self._quitting:
-            self.after(150, self.process_sync_events)
-
     def apply_general_settings(self) -> None:
         self.screenshot_settings.hide_main_during_capture = bool(self.hide_main_during_capture_var.get())
         self.screenshot_settings.start_with_windows = bool(self.start_with_windows_var.get())
@@ -1078,11 +891,6 @@ class IntegratedApp(clip.ClipboardViewer):
 
     def show_capture_page(self) -> None:
         self.show_page(self.capture_tab)
-
-    def show_devices_page(self) -> None:
-        """Navigate to the device sync tab and refresh device list."""
-        self.show_page(self.devices_tab)
-        self.refresh_device_list()
 
     def show_settings_page(self) -> None:
         self.show_page(self.settings_tab)

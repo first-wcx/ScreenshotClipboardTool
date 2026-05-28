@@ -37,9 +37,3 @@ Desktop.ini
 warn-*.txt
 xref-*.html
 base_library.zip
-
-# Android
-android/.gradle/
-android/build/
-android/app/build/
-android/local.properties
