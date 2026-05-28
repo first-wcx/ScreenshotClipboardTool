@@ -1,5 +1,6 @@
 import base64
 import binascii
+import ctypes
 import hashlib
 import json
 import os
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -17,14 +19,6 @@ from tkinter import font as tkfont
 
 from PIL import Image, ImageDraw
 import pystray
-
-from platform_adapter import (
-    CF_BITMAP,
-    CF_DIB,
-    CF_HDROP,
-    CF_UNICODETEXT,
-    get_adapter,
-)
 
 
 def app_base_dir():
@@ -51,10 +45,67 @@ SYNC_STREAM_BUFFER = 65536
 SYNCED_FILES_DIR_NAME = "synced_files"
 SCREENSHOT_EDITOR_COMPONENTS = None
 
+CF_UNICODETEXT = 13
+CF_HDROP = 15
+CF_DIB = 8
+CF_BITMAP = 2
+
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+
+
+class DROPFILES(ctypes.Structure):
+    _fields_ = [
+        ("pFiles", wintypes.DWORD),
+        ("pt", wintypes.POINT),
+        ("fNC", wintypes.BOOL),
+        ("fWide", wintypes.BOOL),
+    ]
+
+user32.OpenClipboard.argtypes = [wintypes.HWND]
+user32.OpenClipboard.restype = wintypes.BOOL
+user32.CloseClipboard.argtypes = []
+user32.CloseClipboard.restype = wintypes.BOOL
+user32.IsClipboardFormatAvailable.argtypes = [wintypes.UINT]
+user32.IsClipboardFormatAvailable.restype = wintypes.BOOL
+user32.GetClipboardData.argtypes = [wintypes.UINT]
+user32.GetClipboardData.restype = wintypes.HANDLE
+user32.EmptyClipboard.argtypes = []
+user32.EmptyClipboard.restype = wintypes.BOOL
+user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+user32.SetClipboardData.restype = wintypes.HANDLE
+user32.GetClipboardSequenceNumber.argtypes = []
+user32.GetClipboardSequenceNumber.restype = wintypes.DWORD
+
+kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+kernel32.GlobalLock.restype = wintypes.LPVOID
+kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+kernel32.GlobalUnlock.restype = wintypes.BOOL
+kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+kernel32.GlobalFree.restype = wintypes.HGLOBAL
+kernel32.GlobalSize.argtypes = [wintypes.HGLOBAL]
+kernel32.GlobalSize.restype = ctypes.c_size_t
+
+shell32.DragQueryFileW.argtypes = [wintypes.HANDLE, wintypes.UINT, wintypes.LPWSTR, wintypes.UINT]
+shell32.DragQueryFileW.restype = wintypes.UINT
+
+GMEM_MOVEABLE = 0x0002
+GMEM_ZEROINIT = 0x0040
+
 
 def enable_dpi_awareness():
-    """启用 DPI 感知，委托给平台适配器。"""
-    get_adapter().enable_dpi_awareness()
+    if sys.platform != "win32":
+        return
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
 
 
 def dpi_scale(widget):
@@ -109,46 +160,71 @@ class ClipboardAccessError(Exception):
     pass
 
 
-# ---------------------------------------------------------------------------
-# 剪贴板兼容层：保留原函数签名，内部委托给平台适配器
-# ---------------------------------------------------------------------------
 class WindowsClipboard:
-    """剪贴板上下文管理器（兼容层）。
-
-    在 Windows 上原需显式 OpenClipboard/CloseClipboard，
-    现由适配器内部处理，此类保留为无操作上下文管理器。
-    """
-
     def __enter__(self):
+        if not user32.OpenClipboard(None):
+            raise ClipboardAccessError("剪切板正被其他程序占用，请稍后重试。")
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        pass
+        user32.CloseClipboard()
 
 
 def format_available(fmt):
-    """检查剪贴板中是否有指定格式的数据。"""
-    return get_adapter().clipboard_is_format_available(fmt)
+    return bool(user32.IsClipboardFormatAvailable(fmt))
 
 
 def get_clipboard_sequence_number():
-    """获取剪贴板序列号。"""
-    return get_adapter().clipboard_get_sequence_number()
+    return int(user32.GetClipboardSequenceNumber())
 
 
 def read_unicode_text():
-    """读取剪贴板中的 Unicode 文本。"""
-    return get_adapter().clipboard_read_text()
+    if not format_available(CF_UNICODETEXT):
+        return None
+    handle = user32.GetClipboardData(CF_UNICODETEXT)
+    if not handle:
+        return None
+    pointer = kernel32.GlobalLock(handle)
+    if not pointer:
+        return None
+    try:
+        return ctypes.wstring_at(pointer)
+    finally:
+        kernel32.GlobalUnlock(handle)
 
 
 def read_file_list():
-    """读取剪贴板中的文件列表。"""
-    return get_adapter().clipboard_read_file_list()
+    if not format_available(CF_HDROP):
+        return None
+    handle = user32.GetClipboardData(CF_HDROP)
+    if not handle:
+        return None
+    count = shell32.DragQueryFileW(handle, 0xFFFFFFFF, None, 0)
+    paths = []
+    for index in range(count):
+        length = shell32.DragQueryFileW(handle, index, None, 0)
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        shell32.DragQueryFileW(handle, index, buffer, length + 1)
+        paths.append(buffer.value)
+    return paths
 
 
 def read_dib_bytes():
-    """读取剪贴板中的 DIB 图片数据。"""
-    return get_adapter().clipboard_read_dib_bytes()
+    if not format_available(CF_DIB):
+        return None
+    handle = user32.GetClipboardData(CF_DIB)
+    if not handle:
+        return None
+    size = int(kernel32.GlobalSize(handle))
+    if size <= 0:
+        return None
+    pointer = kernel32.GlobalLock(handle)
+    if not pointer:
+        return None
+    try:
+        return ctypes.string_at(pointer, size)
+    finally:
+        kernel32.GlobalUnlock(handle)
 
 
 def dib_to_bmp_bytes(dib):
@@ -222,32 +298,56 @@ def save_synced_files(files_data):
     return new_paths, sync_id
 
 
-def write_unicode_text(text):
-    """写入 Unicode 文本到剪贴板。"""
+def allocate_global_bytes(data, error_message):
+    handle = kernel32.GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, len(data))
+    if not handle:
+        raise ClipboardAccessError(error_message)
+
+    pointer = kernel32.GlobalLock(handle)
+    if not pointer:
+        kernel32.GlobalFree(handle)
+        raise ClipboardAccessError(error_message)
     try:
-        get_adapter().clipboard_write_text(text)
-    except OSError as exc:
-        raise ClipboardAccessError(f"无法写入剪切板文本: {exc}") from exc
+        ctypes.memmove(pointer, data, len(data))
+    finally:
+        kernel32.GlobalUnlock(handle)
+    return handle
+
+
+def replace_clipboard_data(format_id, handle, error_message):
+    with WindowsClipboard():
+        if not user32.EmptyClipboard():
+            kernel32.GlobalFree(handle)
+            raise ClipboardAccessError("无法清空当前剪切板。")
+        if not user32.SetClipboardData(format_id, handle):
+            kernel32.GlobalFree(handle)
+            raise ClipboardAccessError(error_message)
+
+
+def write_unicode_text(text):
+    data = (text + "\0").encode("utf-16-le")
+    handle = allocate_global_bytes(data, "无法写入剪切板文本。")
+    replace_clipboard_data(CF_UNICODETEXT, handle, "无法写入剪切板。")
 
 
 def write_file_list(paths):
-    """写入文件列表到剪贴板。"""
     if not paths:
         raise ClipboardAccessError("这条文件记录没有可恢复的路径。")
-    try:
-        get_adapter().clipboard_write_file_list(paths)
-    except OSError as exc:
-        raise ClipboardAccessError(f"无法写入剪切板文件列表: {exc}") from exc
+
+    file_names = "\0".join(paths) + "\0\0"
+    file_data = file_names.encode("utf-16-le")
+    dropfiles = DROPFILES()
+    dropfiles.pFiles = ctypes.sizeof(DROPFILES)
+    dropfiles.fWide = 1
+    handle = allocate_global_bytes(bytes(dropfiles) + file_data, "无法写入剪切板文件列表。")
+    replace_clipboard_data(CF_HDROP, handle, "无法写入剪切板文件列表。")
 
 
 def write_dib_bytes(dib):
-    """写入 DIB 图片数据到剪贴板。"""
     if not dib:
         raise ClipboardAccessError("这条图片记录没有可恢复的图片数据。")
-    try:
-        get_adapter().clipboard_write_dib_bytes(dib)
-    except OSError as exc:
-        raise ClipboardAccessError(f"无法写入剪切板图片: {exc}") from exc
+    handle = allocate_global_bytes(dib, "无法写入剪切板图片。")
+    replace_clipboard_data(CF_DIB, handle, "无法写入剪切板图片。")
 
 
 def write_image_file_to_clipboard(path):
@@ -285,60 +385,55 @@ def write_clipboard_item(item):
 
 
 def clear_system_clipboard():
-    """清空系统剪贴板。"""
-    try:
-        get_adapter().clipboard_clear()
-    except OSError as exc:
-        raise ClipboardAccessError(f"无法清空当前剪切板: {exc}") from exc
+    with WindowsClipboard():
+        if not user32.EmptyClipboard():
+            raise ClipboardAccessError("无法清空当前剪切板。")
 
 
 def read_clipboard_snapshot():
-    """读取剪贴板快照，使用适配器的批量读取以减少竞态。"""
-    snapshot = get_adapter().clipboard_read_all()
+    with WindowsClipboard():
+        files = read_file_list()
+        if files:
+            digest = hashlib.sha256("\n".join(files).encode("utf-8", errors="ignore")).hexdigest()
+            return {
+                "type": "files",
+                "time": now_label(),
+                "paths": files,
+                "digest": f"files:{digest}",
+                "preview": f"{len(files)} 个文件/文件夹: {shorten(files[0])}",
+            }
 
-    files = snapshot.get("file_list")
-    if files:
-        digest = hashlib.sha256("\n".join(files).encode("utf-8", errors="ignore")).hexdigest()
-        return {
-            "type": "files",
-            "time": now_label(),
-            "paths": files,
-            "digest": f"files:{digest}",
-            "preview": f"{len(files)} 个文件/文件夹: {shorten(files[0])}",
-        }
+        text = read_unicode_text()
+        if text:
+            digest = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
+            return {
+                "type": "text",
+                "time": now_label(),
+                "text": text,
+                "digest": f"text:{digest}",
+                "preview": shorten(text),
+            }
 
-    text = snapshot.get("text")
-    if text:
-        digest = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
-        return {
-            "type": "text",
-            "time": now_label(),
-            "text": text,
-            "digest": f"text:{digest}",
-            "preview": shorten(text),
-        }
+        dib = read_dib_bytes()
+        if dib or format_available(CF_BITMAP):
+            if dib:
+                image_digest, image_path = save_clipboard_image(dib)
+                digest = f"image:{image_digest}"
+                size = len(dib)
+            else:
+                image_path = None
+                size = 0
+                digest = "image:bitmap"
+            return {
+                "type": "image",
+                "time": now_label(),
+                "size": size,
+                "image_path": image_path,
+                "digest": digest,
+                "preview": f"图片数据 ({size} bytes)" if size else "图片数据",
+            }
 
-    dib = snapshot.get("dib_bytes")
-    has_bitmap = snapshot.get("has_bitmap", False)
-    if dib or has_bitmap:
-        if dib:
-            image_digest, image_path = save_clipboard_image(dib)
-            digest = f"image:{image_digest}"
-            size = len(dib)
-        else:
-            image_path = None
-            size = 0
-            digest = "image:bitmap"
-        return {
-            "type": "image",
-            "time": now_label(),
-            "size": size,
-            "image_path": image_path,
-            "digest": digest,
-            "preview": f"图片数据 ({size} bytes)" if size else "图片数据",
-        }
-
-    return None
+        return None
 
 
 def load_history():
@@ -1027,7 +1122,7 @@ class TrayIcon:
         self.icon = pystray.Icon(
             "clipboard_viewer",
             self._create_icon_image(),
-            "剪贴板查看器",
+            "Windows 剪切板查看器",
             menu=pystray.Menu(
                 pystray.MenuItem("主页面", self._show_main, default=True),
                 pystray.MenuItem("缩放到托盘", self._hide_main),
@@ -1063,7 +1158,7 @@ class TrayIcon:
 class ClipboardViewer(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("剪切板查看器")
+        self.title("Windows 剪切板查看器")
         self.ui_scale = dpi_scale(self)
         self.default_width = int(WINDOW_WIDTH * self.ui_scale)
         self.default_height = int(WINDOW_HEIGHT * self.ui_scale)
@@ -1521,7 +1616,7 @@ class ClipboardViewer(tk.Tk):
             return
 
         try:
-            get_adapter().open_file(target)
+            os.startfile(target)
         except OSError as exc:
             messagebox.showerror("打开失败", str(exc))
 
@@ -1607,7 +1702,7 @@ class ClipboardViewer(tk.Tk):
             return
 
         try:
-            get_adapter().reveal_path_in_folder(str(target))
+            subprocess.Popen(["explorer.exe", f"/select,{target.resolve()}"])
             self.status_var.set(f"已在目录中定位: {target}")
         except OSError as exc:
             messagebox.showerror("打开目录失败", str(exc))
@@ -1758,8 +1853,9 @@ class ClipboardViewer(tk.Tk):
 
 
 def main():
-    """启动剪贴板查看器（跨平台兼容）。"""
-    get_adapter().enable_dpi_awareness()
+    if os.name != "nt":
+        raise SystemExit("这个小应用只支持 Windows。")
+    enable_dpi_awareness()
     app = ClipboardViewer()
     app.mainloop()
 
