@@ -1,0 +1,231 @@
+classDiagram
+    direction TB
+
+    class SyncMessage {
+        <<data class>>
+        +type: str
+        +origin: str
+        +timestamp: str
+        +payload: dict
+        +to_json() str
+        +from_json(raw: str)$ SyncMessage
+    }
+
+    class DeviceInfo {
+        <<data class>>
+        +device_id: str
+        +device_name: str
+        +device_type: str
+        +ip_address: str
+        +port: int
+        +platform: str
+        +paired_at: str
+        +last_seen: str
+    }
+
+    class PairingInfo {
+        <<data class>>
+        +pairing_id: str
+        +host: str
+        +port: int
+        +token: str
+        +expires_at: float
+        +to_qr_text() str
+    }
+
+    class SyncConfig {
+        <<data class>>
+        +enabled: bool
+        +listen_host: str
+        +port: int
+        +shared_secret: str
+        +sync_text: bool
+        +sync_images: bool
+        +sync_files: bool
+        +lan_only: bool
+        +relay_url: str
+    }
+
+    class SyncManagerV2 {
+        -config: SyncConfig
+        -device_manager: DeviceManager
+        -ws_server: WebSocketServer
+        -ws_clients: dict
+        -mdns: MdnsAdvertiser
+        -event_queue: Queue
+        -node_id: str
+        -_stop_event: Event
+        +start() None
+        +stop() None
+        +publish(item: dict) None
+        +get_connected_devices() list
+        +connect_to_device(device: DeviceInfo) None
+        +disconnect_device(device_id: str) None
+        -_on_client_connected(ws, device_id) None
+        -_on_client_disconnected(device_id) None
+        -_on_message(device_id, message) None
+        -_broadcast(message, exclude) None
+        -_run_auth_handshake(ws) str
+    }
+
+    class WebSocketServer {
+        -host: str
+        -port: int
+        -connections: dict
+        +start() None
+        +stop() None
+        +broadcast(data: bytes, exclude: set) None
+        +send(device_id: str, data: bytes) None
+        -_handler(ws) None
+    }
+
+    class WebSocketClient {
+        -url: str
+        -ws: WebSocketClientProtocol
+        -reconnect_interval: float
+        +connect() None
+        +disconnect() None
+        +send(data: bytes) None
+        +is_connected() bool
+        -_recv_loop() None
+        -_reconnect_loop() None
+    }
+
+    class DeviceManager {
+        -devices: dict
+        -config_path: Path
+        +load() None
+        +save() None
+        +add_device(device: DeviceInfo) None
+        +remove_device(device_id: str) None
+        +get_device(device_id: str) DeviceInfo
+        +list_devices() list
+        +update_last_seen(device_id: str) None
+        +is_paired(device_id: str) bool
+    }
+
+    class DeviceAuthenticator {
+        +generate_challenge() str
+        +compute_hmac(secret: str, challenge: str) str
+        +verify_hmac(secret: str, challenge: str, response: str) bool
+        +generate_pairing_token() str
+    }
+
+    class MdnsAdvertiser {
+        -service_type: str
+        -port: int
+        -info: ServiceInfo
+        +start(device_name: str, port: int) None
+        +stop() None
+    }
+
+    class PairingServer {
+        -host: str
+        -port: int
+        -active_tokens: dict
+        +start() None
+        +stop() None
+        +generate_qr_code() Tuple~str, Image~
+        +generate_pin() str
+        +validate_token(token: str) bool
+    }
+
+    class ProtocolCodec {
+        <<static>>
+        +encode_message(msg: SyncMessage) bytes
+        +decode_message(data: bytes) SyncMessage
+        +encode_clipboard_item(item: dict, config: SyncConfig) bytes
+        +decode_clipboard_item(data: bytes, config: SyncConfig) dict
+    }
+
+    class AndroidSyncManager {
+        -wsClient: OkHttpWebSocket
+        -nsdDiscovery: NsdDiscovery
+        -deviceRepo: DeviceRepository
+        -clipboardRepo: ClipboardRepository
+        -nodeId: String
+        +startDiscovery() None
+        +stopDiscovery() None
+        +connectToDevice(device: DeviceInfo) None
+        +disconnectDevice(deviceId: String) None
+        +publishClipboardItem(item: ClipboardItemEntity) None
+        -onMessageReceived(message: SyncMessage) None
+        -runAuthHandshake(ws: WebSocket) String
+    }
+
+    class AndroidWebSocketClient {
+        -okHttpClient: OkHttpClient
+        -activeConnections: Map~String, WebSocket~
+        +connect(url: String, listener: WebSocketListener) WebSocket
+        +disconnect(deviceId: String) None
+        +send(deviceId: String, data: ByteString) Boolean
+        +broadcast(data: ByteString, exclude: Set~String~) None
+    }
+
+    class NsdDiscovery {
+        -nsdManager: NsdManager
+        -discoveryListener: NsdManager.DiscoveryListener
+        +startDiscovery(serviceType: String) None
+        +stopDiscovery() None
+        +setOnDeviceFoundListener(listener: OnDeviceFoundListener) None
+    }
+
+    class AndroidDeviceAuthenticator {
+        +generateChallenge(): String
+        +computeHmac(secret: String, challenge: String): String
+        +verifyHmac(secret: String, challenge: String, response: String): Boolean
+    }
+
+    class RelayServer {
+        -host: str
+        -port: int
+        -device_registry: DeviceRegistry
+        -signaling: SignalingHandler
+        +start() None
+        +stop() None
+    }
+
+    class SignalingHandler {
+        -device_registry: DeviceRegistry
+        -connections: dict
+        +handle_connection(ws) None
+        +handle_message(device_id: str, message: SyncMessage) None
+        +handle_disconnect(device_id: str) None
+        -_forward_message(from_id: str, message: SyncMessage) None
+    }
+
+    class DeviceRegistry {
+        -db: aiosqlite.Connection
+        +register_device(device_id: str, info: dict) None
+        +unregister_device(device_id: str) None
+        +get_device(device_id: str) dict
+        +list_online_devices() list
+        +add_pairing(device_a: str, device_b: str) None
+        +are_paired(device_a: str, device_b: str) bool
+    }
+
+    %% 桌面端关系
+    SyncManagerV2 *-- WebSocketServer : creates
+    SyncManagerV2 *-- DeviceManager : uses
+    SyncManagerV2 *-- DeviceAuthenticator : uses
+    SyncManagerV2 *-- MdnsAdvertiser : uses
+    SyncManagerV2 *-- PairingServer : uses
+    SyncManagerV2 --> SyncMessage : produces/consumes
+    SyncManagerV2 --> SyncConfig : configured by
+    WebSocketServer --> WebSocketClient : manages peer
+    DeviceManager --> DeviceInfo : stores
+    PairingServer --> PairingInfo : generates
+    ProtocolCodec --> SyncMessage : encodes/decodes
+
+    %% Android 端关系
+    AndroidSyncManager *-- AndroidWebSocketClient : uses
+    AndroidSyncManager *-- NsdDiscovery : uses
+    AndroidSyncManager *-- AndroidDeviceAuthenticator : uses
+    AndroidSyncManager --> SyncMessage : produces/consumes
+    AndroidSyncManager --> DeviceInfo : manages
+
+    %% 中转服务器关系
+    RelayServer *-- SignalingHandler : uses
+    RelayServer *-- DeviceRegistry : uses
+    SignalingHandler --> SyncMessage : routes
+    DeviceRegistry --> DeviceInfo : stores

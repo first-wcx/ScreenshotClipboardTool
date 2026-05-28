@@ -19,6 +19,11 @@ linux = [
     "pynput>=1.7.0",
     "python-xlib>=0.33",
 ]
+sync = [
+    "websockets>=12.0",
+    "zeroconf>=0.131.0",
+    "qrcode[pil]>=7.4",
+]
 
 [project.scripts]
 integrated-tool = "integrated_tool.app:main"
