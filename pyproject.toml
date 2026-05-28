@@ -15,10 +15,6 @@ macos = [
     "pyobjc-framework-Quartz>=9.0",
     "pynput>=1.7.0",
 ]
-linux = [
-    "pynput>=1.7.0",
-    "python-xlib>=0.33",
-]
 
 [project.scripts]
 integrated-tool = "integrated_tool.app:main"

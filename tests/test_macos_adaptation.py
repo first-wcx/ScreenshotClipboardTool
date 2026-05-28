@@ -149,17 +149,17 @@ class TestCrossPlatformConsistency(unittest.TestCase):
         self.assertIs(adapter1, adapter2)
         platform_adapter._adapter_instance = None
 
-    def test_get_adapter_returns_linux_adapter_on_non_win32_darwin(self):
-        """在非 win32/darwin 平台上，get_adapter() 应返回 LinuxAdapter。"""
+    def test_get_adapter_raises_on_unsupported_platform(self):
+        """在不支持的平台上，get_adapter() 应抛出 RuntimeError。"""
         import platform_adapter
         original = sys.platform
         try:
-            # 模拟 Linux 或其他类 Unix 系统
-            sys.platform = "linux"
+            # 模拟不支持的操作系统
+            sys.platform = "freebsd"
             platform_adapter._adapter_instance = None
-            adapter = platform_adapter.get_adapter()
-            self.assertEqual(type(adapter).__name__, "LinuxAdapter",
-                             f"在非 win32/darwin 平台上应返回 LinuxAdapter，实际返回 {type(adapter).__name__}")
+            with self.assertRaises(RuntimeError) as ctx:
+                platform_adapter.get_adapter()
+            self.assertIn("不支持的平台", str(ctx.exception))
         finally:
             sys.platform = original
             platform_adapter._adapter_instance = None
@@ -868,7 +868,7 @@ class TestBuildMacOSScript(unittest.TestCase):
         with open(script_path, encoding="utf-8") as f:
             first_line = f.readline().strip()
         self.assertTrue(
-            first_line.startswith("#!/usr/") or first_line.startswith("#!/bin/"),
+            first_line.startswith("#!/usr/"),
             f"shebang 不正确: {first_line}"
         )
 
